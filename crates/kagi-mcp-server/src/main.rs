@@ -216,14 +216,16 @@ impl KagiMcpServer {
                     all_results.push_str(&Self::format_search_results(query, &response));
                 }
                 Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Search failed for query '{query}': {e}"
                     ))]));
                 }
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(all_results)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            all_results,
+        )]))
     }
 
     /// Summarize content from a URL using the Kagi Summarizer API. The
@@ -247,10 +249,10 @@ impl KagiMcpServer {
             )
             .await
         {
-            Ok(summary_data) => Ok(CallToolResult::success(vec![Content::text(
+            Ok(summary_data) => Ok(CallToolResult::success(vec![ContentBlock::text(
                 summary_data.output,
             )])),
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Summarization failed: {e}"
             ))])),
         }
@@ -281,9 +283,9 @@ impl KagiMcpServer {
                     }
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(result)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "FastGPT failed for query '{}': {e}",
                 params.query
             ))])),
@@ -359,32 +361,27 @@ impl KagiMcpServer {
                     }
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(formatted)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(formatted)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Enrichment failed for query '{query}': {e}"
             ))])),
         }
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for KagiMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(
                 "Kagi MCP Server providing search, summarization, FastGPT, \
-                 and enrichment tools powered by Kagi's APIs."
-                    .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "kagi-mcp-server".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
+                 and enrichment tools powered by Kagi's APIs.",
+            )
+            .with_server_info(Implementation::new(
+                "kagi-mcp-server",
+                env!("CARGO_PKG_VERSION"),
+            ))
     }
 }
 
