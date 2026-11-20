@@ -22,12 +22,8 @@
 //!
 //!     // Search the web
 //!     let results = client.search("rust programming", Some(10)).await?;
-//!     for result in results.data {
-//!         if result.result_type == 0 {
-//!             let title = result.title.as_deref().unwrap_or("No title");
-//!             let url = result.url.as_deref().unwrap_or("No URL");
-//!             println!("{}: {}", title, url);
-//!         }
+//!     for result in results.data.search {
+//!         println!("{}: {}", result.title, result.url);
 //!     }
 //!
 //!     // Summarize content
@@ -84,11 +80,46 @@ pub enum EnrichType {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SearchResponse {
     pub meta: SearchMeta,
-    pub data: Vec<SearchResult>,
+    pub data: SearchData,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SearchMeta {
+    pub trace: String,
+    pub node: String,
+    pub ms: u64,
+    #[serde(default)]
+    pub api_balance: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SearchData {
+    #[serde(default)]
+    pub search: Vec<SearchItem>,
+    #[serde(default)]
+    pub related_search: Vec<RelatedSearchItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SearchItem {
+    pub url: String,
+    pub title: String,
+    #[serde(default)]
+    pub snippet: Option<String>,
+    #[serde(default)]
+    pub time: Option<String>,
+    #[serde(default)]
+    pub image: Option<Thumbnail>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RelatedSearchItem {
+    pub url: String,
+    pub title: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EnrichMeta {
     pub id: String,
     pub node: String,
     pub ms: u64,
@@ -174,7 +205,7 @@ pub struct FastGptReference {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EnrichResponse {
-    pub meta: SearchMeta,
+    pub meta: EnrichMeta,
     pub data: Vec<SearchResult>,
 }
 
@@ -202,7 +233,7 @@ impl KagiClient {
         Self {
             client: Client::new(),
             api_key: api_key.into(),
-            search_api_version: "v0".to_string(),
+            search_api_version: "v1".to_string(),
             summarizer_api_version: "v0".to_string(),
             fastgpt_api_version: "v0".to_string(),
             enrich_api_version: "v0".to_string(),
@@ -218,7 +249,7 @@ impl KagiClient {
         Self {
             client: Client::new(),
             api_key: api_key.into(),
-            search_api_version: "v0".to_string(),
+            search_api_version: "v1".to_string(),
             summarizer_api_version: "v0".to_string(),
             fastgpt_api_version: "v0".to_string(),
             enrich_api_version: "v0".to_string(),
@@ -277,24 +308,31 @@ impl KagiClient {
     ///
     /// # Arguments
     /// * `query` - The search query
-    /// * `limit` - Maximum number of results (optional, defaults to 10)
+    /// * `limit` - Maximum number of results (optional)
     ///
     /// # Errors
     ///
     /// Returns an error if the API request fails or the response cannot be parsed.
     pub async fn search(&self, query: &str, limit: Option<u32>) -> Result<SearchResponse> {
-        let mut url = self.build_url(&self.search_api_version, "search")?;
+        let url = self.build_url(&self.search_api_version, "search")?;
 
-        url.query_pairs_mut().append_pair("q", query);
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "query".to_string(),
+            serde_json::Value::String(query.to_string()),
+        );
         if let Some(limit) = limit {
-            url.query_pairs_mut()
-                .append_pair("limit", &limit.to_string());
+            params.insert(
+                "limit".to_string(),
+                serde_json::Value::Number(limit.into()),
+            );
         }
 
         let response = self
             .client
-            .get(url)
-            .header("Authorization", format!("Bot {}", self.api_key))
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&params)
             .send()
             .await?;
 
@@ -505,7 +543,7 @@ mod tests {
         let client = KagiClient::new("test-key");
         assert_eq!(client.api_key, "test-key");
         assert_eq!(client.base_url_prefix, API_BASE_URL_PREFIX);
-        assert_eq!(client.search_api_version, "v0");
+        assert_eq!(client.search_api_version, "v1");
         assert_eq!(client.summarizer_api_version, "v0");
         assert_eq!(client.fastgpt_api_version, "v0");
         assert_eq!(client.enrich_api_version, "v0");
@@ -557,5 +595,51 @@ mod tests {
         assert!(json.contains("\"cache\":false"));
         assert!(!json.contains("\"web_search\":\"true\""));
         assert!(!json.contains("\"cache\":\"false\""));
+    }
+
+    #[test]
+    fn test_v1_search_response_deserialization() {
+        let raw_json = r#"{
+            "meta": {
+                "trace": "45f5c9b85e8a84c298e6ead8ee31bc85",
+                "ms": 1050,
+                "node": "us-central1"
+            },
+            "data": {
+                "search": [
+                    {
+                        "url": "https://en.wikipedia.org/wiki/Foobar",
+                        "title": "Foobar - Wikipedia",
+                        "snippet": "The terms foobar...",
+                        "time": "2026-10-30T03:47:39Z",
+                        "image": {
+                            "url": "https://p.kagi.com/proxy/TC-dbl.PNG",
+                            "width": 657,
+                            "height": 1200
+                        },
+                        "props": {
+                            "language": "en"
+                        }
+                    }
+                ],
+                "related_search": [
+                    {
+                        "url": "/search?q=foo+bar+baz",
+                        "title": "foo bar baz"
+                    }
+                ]
+            }
+        }"#;
+
+        let parsed: SearchResponse = serde_json::from_str(raw_json).unwrap();
+        assert_eq!(parsed.meta.trace, "45f5c9b85e8a84c298e6ead8ee31bc85");
+        assert_eq!(parsed.data.search.len(), 1);
+        assert_eq!(parsed.data.search[0].title, "Foobar - Wikipedia");
+        assert_eq!(
+            parsed.data.search[0].time.as_deref(),
+            Some("2026-10-30T03:47:39Z")
+        );
+        assert_eq!(parsed.data.related_search.len(), 1);
+        assert_eq!(parsed.data.related_search[0].title, "foo bar baz");
     }
 }

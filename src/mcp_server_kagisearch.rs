@@ -27,7 +27,7 @@ struct KagiContextServerSettings {
 
 // Default API versions
 fn default_search_api_version() -> String {
-    "v0".to_string()
+    "v1".to_string()
 }
 
 fn default_summarizer_api_version() -> String {

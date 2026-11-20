@@ -31,7 +31,7 @@ struct Args {
     summarizer_engine: String,
 
     /// API version for search endpoint
-    #[arg(long, env = "KAGI_SEARCH_API_VERSION", default_value = "v0")]
+    #[arg(long, env = "KAGI_SEARCH_API_VERSION", default_value = "v1")]
     search_api_version: String,
 
     /// API version for summarizer endpoint
@@ -148,48 +148,27 @@ impl KagiMcpServer {
 
     fn format_search_results(query: &str, response: &kagiapi::SearchResponse) -> String {
         let mut output = format!("-----\nResults for search query \"{query}\":\n-----\n");
-        let mut result_number = 1;
 
-        for result in &response.data {
-            match result.result_type {
-                0 => {
-                    if let (Some(title), Some(url)) = (&result.title, &result.url) {
-                        let _ = writeln!(output, "{result_number}: {title}\n{url}");
-                        let _ = writeln!(
-                            output,
-                            "Published Date: {}",
-                            result.published.as_deref().unwrap_or("Not Available")
-                        );
-                        if let Some(snippet) = &result.snippet {
-                            let _ = writeln!(output, "{snippet}");
-                        }
-                        output.push('\n');
-                        result_number += 1;
-                    }
-                }
-                1 => {
-                    if let Some(list) = &result.list {
-                        output.push_str("Related searches:\n");
-                        for item in list {
-                            let _ = writeln!(output, "- {item}");
-                        }
-                        output.push('\n');
-                    }
-                }
-                _ => {
-                    if let Some(title) = &result.title {
-                        let _ = writeln!(output, "{result_number}: {title}");
-                        if let Some(url) = &result.url {
-                            let _ = writeln!(output, "{url}");
-                        }
-                        if let Some(snippet) = &result.snippet {
-                            let _ = writeln!(output, "{snippet}");
-                        }
-                        output.push('\n');
-                        result_number += 1;
-                    }
-                }
+        for (i, result) in response.data.search.iter().enumerate() {
+            let result_number = i + 1;
+            let _ = writeln!(output, "{result_number}: {}\n{}", result.title, result.url);
+            let _ = writeln!(
+                output,
+                "Published Date: {}",
+                result.time.as_deref().unwrap_or("Not Available")
+            );
+            if let Some(snippet) = &result.snippet {
+                let _ = writeln!(output, "{snippet}");
             }
+            output.push('\n');
+        }
+
+        if !response.data.related_search.is_empty() {
+            output.push_str("Related searches:\n");
+            for item in &response.data.related_search {
+                let _ = writeln!(output, "- {}", item.title);
+            }
+            output.push('\n');
         }
 
         output
