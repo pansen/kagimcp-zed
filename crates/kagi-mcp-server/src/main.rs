@@ -31,7 +31,7 @@ struct Args {
     summarizer_engine: String,
 
     /// API version for search endpoint
-    #[arg(long, env = "KAGI_SEARCH_API_VERSION", default_value = "v0")]
+    #[arg(long, env = "KAGI_SEARCH_API_VERSION", default_value = "v1")]
     search_api_version: String,
 
     /// API version for summarizer endpoint
@@ -148,48 +148,27 @@ impl KagiMcpServer {
 
     fn format_search_results(query: &str, response: &kagiapi::SearchResponse) -> String {
         let mut output = format!("-----\nResults for search query \"{query}\":\n-----\n");
-        let mut result_number = 1;
 
-        for result in &response.data {
-            match result.result_type {
-                0 => {
-                    if let (Some(title), Some(url)) = (&result.title, &result.url) {
-                        let _ = writeln!(output, "{result_number}: {title}\n{url}");
-                        let _ = writeln!(
-                            output,
-                            "Published Date: {}",
-                            result.published.as_deref().unwrap_or("Not Available")
-                        );
-                        if let Some(snippet) = &result.snippet {
-                            let _ = writeln!(output, "{snippet}");
-                        }
-                        output.push('\n');
-                        result_number += 1;
-                    }
-                }
-                1 => {
-                    if let Some(list) = &result.list {
-                        output.push_str("Related searches:\n");
-                        for item in list {
-                            let _ = writeln!(output, "- {item}");
-                        }
-                        output.push('\n');
-                    }
-                }
-                _ => {
-                    if let Some(title) = &result.title {
-                        let _ = writeln!(output, "{result_number}: {title}");
-                        if let Some(url) = &result.url {
-                            let _ = writeln!(output, "{url}");
-                        }
-                        if let Some(snippet) = &result.snippet {
-                            let _ = writeln!(output, "{snippet}");
-                        }
-                        output.push('\n');
-                        result_number += 1;
-                    }
-                }
+        for (i, result) in response.data.search.iter().enumerate() {
+            let result_number = i + 1;
+            let _ = writeln!(output, "{result_number}: {}\n{}", result.title, result.url);
+            let _ = writeln!(
+                output,
+                "Published Date: {}",
+                result.time.as_deref().unwrap_or("Not Available")
+            );
+            if let Some(snippet) = &result.snippet {
+                let _ = writeln!(output, "{snippet}");
             }
+            output.push('\n');
+        }
+
+        if !response.data.related_search.is_empty() {
+            output.push_str("Related searches:\n");
+            for item in &response.data.related_search {
+                let _ = writeln!(output, "- {}", item.title);
+            }
+            output.push('\n');
         }
 
         output
@@ -216,14 +195,16 @@ impl KagiMcpServer {
                     all_results.push_str(&Self::format_search_results(query, &response));
                 }
                 Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Search failed for query '{query}': {e}"
                     ))]));
                 }
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(all_results)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            all_results,
+        )]))
     }
 
     /// Summarize content from a URL using the Kagi Summarizer API. The
@@ -247,10 +228,10 @@ impl KagiMcpServer {
             )
             .await
         {
-            Ok(summary_data) => Ok(CallToolResult::success(vec![Content::text(
+            Ok(summary_data) => Ok(CallToolResult::success(vec![ContentBlock::text(
                 summary_data.output,
             )])),
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Summarization failed: {e}"
             ))])),
         }
@@ -281,9 +262,9 @@ impl KagiMcpServer {
                     }
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(result)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "FastGPT failed for query '{}': {e}",
                 params.query
             ))])),
@@ -359,32 +340,27 @@ impl KagiMcpServer {
                     }
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(formatted)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(formatted)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Enrichment failed for query '{query}': {e}"
             ))])),
         }
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for KagiMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(
                 "Kagi MCP Server providing search, summarization, FastGPT, \
-                 and enrichment tools powered by Kagi's APIs."
-                    .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "kagi-mcp-server".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
+                 and enrichment tools powered by Kagi's APIs.",
+            )
+            .with_server_info(Implementation::new(
+                "kagi-mcp-server",
+                env!("CARGO_PKG_VERSION"),
+            ))
     }
 }
 
